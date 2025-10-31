@@ -1,0 +1,12 @@
+{
+    "name": "GH2 Dev Container",
+    "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+    "features": {
+        "ghcr.io/devcontainers/features/java:1": {
+            "version": "17"
+        },
+        "ghcr.io/devcontainers/features/maven:1": {
+            "version": "latest"
+        }
+    }
+}
