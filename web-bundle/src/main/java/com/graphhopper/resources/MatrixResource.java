@@ -70,7 +70,7 @@ public class MatrixResource {
         int[] sourceNodes = snapPoints(request.sources, snapFilter);
         int[] targetNodes = snapPoints(request.targets, snapFilter);
 
-        boolean includePathMetrics = request.includePathMetrics;
+        boolean includePathMetrics = true;
 
         int[] validSourceNodes = extractValidNodes(sourceNodes);
         int[] validSourceIndices = extractValidIndices(sourceNodes);
@@ -99,9 +99,6 @@ public class MatrixResource {
         }
 
         MatrixResponse response = MatrixResponse.fromFullMatrices(
-                sourceNodes,
-                targetNodes,
-                accumulator.weights,
                 accumulator.distances,
                 accumulator.times,
                 baseMetrics,
@@ -166,56 +163,45 @@ public class MatrixResource {
     }
 
     private static final class MatrixAccumulator {
-        final float[][] weights;
         final long[][] distances;
         final long[][] times;
 
         MatrixAccumulator(int sources, int targets, boolean includePathMetrics) {
-            weights = new float[sources][targets];
-            for (float[] row : weights)
-                Arrays.fill(row, Float.POSITIVE_INFINITY);
-
+            distances = includePathMetrics ? new long[sources][targets] : null;
+            times = includePathMetrics ? new long[sources][targets] : null;
             if (includePathMetrics) {
-                distances = new long[sources][targets];
-                times = new long[sources][targets];
                 for (int i = 0; i < sources; i++) {
                     Arrays.fill(distances[i], -1);
                     Arrays.fill(times[i], -1);
                 }
-            } else {
-                distances = null;
-                times = null;
             }
         }
 
         void insertOneToMany(int sourceIndex, int[] targetIndices, RPHASTAlgorithm.OneToManyResult result) {
-            float[] weightRow = weights[sourceIndex];
-            long[] distanceRow = distances != null ? distances[sourceIndex] : null;
+            if (distances == null || result.distanceMeters == null)
+                return;
+            long[] distanceRow = distances[sourceIndex];
             long[] timeRow = times != null ? times[sourceIndex] : null;
             for (int i = 0; i < targetIndices.length; i++) {
                 int targetIdx = targetIndices[i];
-                weightRow[targetIdx] = result.weight[i];
-                if (distanceRow != null && result.distanceMeters != null)
-                    distanceRow[targetIdx] = result.distanceMeters[i];
+                distanceRow[targetIdx] = result.distanceMeters[i];
                 if (timeRow != null && result.timeMillis != null)
                     timeRow[targetIdx] = result.timeMillis[i];
             }
         }
 
         void insertManyToMany(int[] sourceIndices, int[] targetIndices, RPHASTAlgorithm.ManyToManyResult result) {
+            if (distances == null || result.distanceMeters == null)
+                return;
             for (int i = 0; i < sourceIndices.length; i++) {
                 int sourceIdx = sourceIndices[i];
-                float[] weightRow = weights[sourceIdx];
-                float[] weightResultRow = result.weight[i];
-                long[] distanceRow = distances != null ? distances[sourceIdx] : null;
-                long[] distanceResultRow = result.distanceMeters != null ? result.distanceMeters[i] : null;
+                long[] distanceRow = distances[sourceIdx];
+                long[] distanceResultRow = result.distanceMeters[i];
                 long[] timeRow = times != null ? times[sourceIdx] : null;
                 long[] timeResultRow = result.timeMillis != null ? result.timeMillis[i] : null;
                 for (int j = 0; j < targetIndices.length; j++) {
                     int targetIdx = targetIndices[j];
-                    weightRow[targetIdx] = weightResultRow[j];
-                    if (distanceRow != null && distanceResultRow != null)
-                        distanceRow[targetIdx] = distanceResultRow[j];
+                    distanceRow[targetIdx] = distanceResultRow[j];
                     if (timeRow != null && timeResultRow != null)
                         timeRow[targetIdx] = timeResultRow[j];
                 }
@@ -251,77 +237,25 @@ public class MatrixResource {
     }
 
     public static class MatrixResponse {
-        public final List<Integer> sourceNodes;
-        public final List<Integer> targetNodes;
-        public final List<List<Double>> weights;
         public final List<List<Long>> distances;
         public final List<List<Long>> times;
         public final Metrics metrics;
 
-        private MatrixResponse(List<Integer> sourceNodes, List<Integer> targetNodes,
-                               List<List<Double>> weights, List<List<Long>> distances,
+        private MatrixResponse(List<List<Long>> distances,
                                List<List<Long>> times, Metrics metrics) {
-            this.sourceNodes = sourceNodes;
-            this.targetNodes = targetNodes;
-            this.weights = weights;
             this.distances = distances;
             this.times = times;
             this.metrics = metrics;
         }
 
-        static MatrixResponse fromFullMatrices(int[] sources, int[] targets,
-                                               float[][] weights,
-                                               long[][] distances,
+        static MatrixResponse fromFullMatrices(long[][] distances,
                                                long[][] times,
                                                RPHASTAlgorithm.Metrics metrics,
                                                boolean includePathMetrics) {
-            List<Integer> sourceNodes = toList(sources);
-            List<Integer> targetNodes = toList(targets);
-            List<List<Double>> weightsMatrix = toMatrix(weights);
             List<List<Long>> distanceMatrix = includePathMetrics ? toMatrix(distances) : null;
             List<List<Long>> timeMatrix = includePathMetrics ? toMatrix(times) : null;
             Metrics matrixMetrics = Metrics.from(metrics);
-            return new MatrixResponse(sourceNodes, targetNodes, weightsMatrix, distanceMatrix, timeMatrix, matrixMetrics);
-        }
-
-        static MatrixResponse fromOneToMany(RPHASTAlgorithm.OneToManyResult result, int[] sources, int[] targets, boolean includePathMetrics) {
-            List<Integer> sourceNodes = toList(sources);
-            List<Integer> targetNodes = toList(targets);
-            List<List<Double>> weights = toMatrix(result.weight);
-            List<List<Long>> distances = includePathMetrics ? toMatrix(result.distanceMeters) : null;
-            List<List<Long>> times = includePathMetrics ? toMatrix(result.timeMillis) : null;
-            Metrics metrics = Metrics.from(result.metrics);
-            return new MatrixResponse(sourceNodes, targetNodes, weights, distances, times, metrics);
-        }
-
-        static MatrixResponse fromManyToMany(RPHASTAlgorithm.ManyToManyResult result, int[] sources, int[] targets, boolean includePathMetrics) {
-            List<Integer> sourceNodes = toList(sources);
-            List<Integer> targetNodes = toList(targets);
-            List<List<Double>> weights = toMatrix(result.weight);
-            List<List<Long>> distances = includePathMetrics ? toMatrix(result.distanceMeters) : null;
-            List<List<Long>> times = includePathMetrics ? toMatrix(result.timeMillis) : null;
-            Metrics metrics = Metrics.from(result.metrics);
-            return new MatrixResponse(sourceNodes, targetNodes, weights, distances, times, metrics);
-        }
-
-        private static List<Integer> toList(int[] values) {
-            List<Integer> list = new ArrayList<>(values.length);
-            for (int value : values)
-                list.add(value);
-            return list;
-        }
-
-        private static List<List<Double>> toMatrix(float[] row) {
-            List<List<Double>> matrix = new ArrayList<>(1);
-            matrix.add(toRow(row));
-            return matrix;
-        }
-
-        private static List<List<Double>> toMatrix(float[][] values) {
-            List<List<Double>> matrix = new ArrayList<>(values.length);
-            for (float[] row : values)
-                matrix.add(toRow(row));
-            return matrix;
+            return new MatrixResponse(distanceMatrix, timeMatrix, matrixMetrics);
         }
 
         private static List<List<Long>> toMatrix(long[] row) {
@@ -339,13 +273,6 @@ public class MatrixResource {
             for (long[] row : values)
                 matrix.add(toRow(row));
             return matrix;
-        }
-
-        private static List<Double> toRow(float[] row) {
-            List<Double> list = new ArrayList<>(row.length);
-            for (float value : row)
-                list.add(Float.isInfinite(value) ? null : (double) value);
-            return list;
         }
 
         private static List<Long> toRow(long[] row) {
