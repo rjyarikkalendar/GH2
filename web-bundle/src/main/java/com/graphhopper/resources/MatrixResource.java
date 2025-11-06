@@ -27,6 +27,7 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -69,21 +70,43 @@ public class MatrixResource {
         int[] sourceNodes = snapPoints(request.sources, snapFilter);
         int[] targetNodes = snapPoints(request.targets, snapFilter);
 
-        PMap baseOptions = new PMap(request.algorithmOptions);
         boolean includePathMetrics = request.includePathMetrics;
-        RPHASTAlgorithm.PathMetricsProvider metricsProvider = includePathMetrics
-                ? new CHPathMetricsProvider(chGraph, baseOptions)
-                : null;
-        RPHASTAlgorithm algorithm = new RPHASTAlgorithm(chGraph, metricsProvider, includePathMetrics);
 
-        MatrixResponse response;
-        if (sourceNodes.length == 1) {
-            RPHASTAlgorithm.OneToManyResult result = algorithm.calcOneToMany(sourceNodes[0], targetNodes);
-            response = MatrixResponse.fromOneToMany(result, sourceNodes, targetNodes, includePathMetrics);
-        } else {
-            RPHASTAlgorithm.ManyToManyResult result = algorithm.calcManyToMany(sourceNodes, targetNodes);
-            response = MatrixResponse.fromManyToMany(result, sourceNodes, targetNodes, includePathMetrics);
+        int[] validSourceNodes = extractValidNodes(sourceNodes);
+        int[] validSourceIndices = extractValidIndices(sourceNodes);
+        int[] validTargetNodes = extractValidNodes(targetNodes);
+        int[] validTargetIndices = extractValidIndices(targetNodes);
+
+        MatrixAccumulator accumulator = new MatrixAccumulator(sourceNodes.length, targetNodes.length, includePathMetrics);
+        RPHASTAlgorithm.Metrics baseMetrics = new RPHASTAlgorithm.Metrics();
+
+        if (validSourceNodes.length > 0 && validTargetNodes.length > 0) {
+            PMap baseOptions = new PMap(request.algorithmOptions);
+            RPHASTAlgorithm.PathMetricsProvider metricsProvider = includePathMetrics
+                    ? new CHPathMetricsProvider(chGraph, baseOptions)
+                    : null;
+            RPHASTAlgorithm algorithm = new RPHASTAlgorithm(chGraph, metricsProvider, includePathMetrics);
+
+            if (validSourceNodes.length == 1) {
+                RPHASTAlgorithm.OneToManyResult result = algorithm.calcOneToMany(validSourceNodes[0], validTargetNodes);
+                accumulator.insertOneToMany(validSourceIndices[0], validTargetIndices, result);
+                baseMetrics = result.metrics;
+            } else {
+                RPHASTAlgorithm.ManyToManyResult result = algorithm.calcManyToMany(validSourceNodes, validTargetNodes);
+                accumulator.insertManyToMany(validSourceIndices, validTargetIndices, result);
+                baseMetrics = result.metrics;
+            }
         }
+
+        MatrixResponse response = MatrixResponse.fromFullMatrices(
+                sourceNodes,
+                targetNodes,
+                accumulator.weights,
+                accumulator.distances,
+                accumulator.times,
+                baseMetrics,
+                includePathMetrics
+        );
 
         double tookMillis = sw.stop().getMillisDouble();
         LOGGER.info("matrix profile={} sources={} targets={} took={} ms", profileName, sourceNodes.length, targetNodes.length, String.format("%.1f", tookMillis));
@@ -103,11 +126,101 @@ public class MatrixResource {
             MatrixPoint pt = points.get(i);
             Snap snap = locationIndex.findClosest(pt.lat, pt.lon, snapFilter);
             if (!snap.isValid()) {
-                throw new IllegalArgumentException("Point " + pt + " could not be snapped to the road network");
+                LOGGER.warn("Point {} could not be snapped to the road network", pt);
+                nodes[i] = -1;
+                continue;
             }
             nodes[i] = snap.getClosestNode();
         }
         return nodes;
+    }
+
+    private static int[] extractValidNodes(int[] nodes) {
+        int count = 0;
+        for (int node : nodes) {
+            if (node >= 0)
+                count++;
+        }
+        int[] result = new int[count];
+        int idx = 0;
+        for (int node : nodes) {
+            if (node >= 0)
+                result[idx++] = node;
+        }
+        return result;
+    }
+
+    private static int[] extractValidIndices(int[] nodes) {
+        int count = 0;
+        for (int node : nodes) {
+            if (node >= 0)
+                count++;
+        }
+        int[] result = new int[count];
+        int idx = 0;
+        for (int i = 0; i < nodes.length; i++) {
+            if (nodes[i] >= 0)
+                result[idx++] = i;
+        }
+        return result;
+    }
+
+    private static final class MatrixAccumulator {
+        final float[][] weights;
+        final long[][] distances;
+        final long[][] times;
+
+        MatrixAccumulator(int sources, int targets, boolean includePathMetrics) {
+            weights = new float[sources][targets];
+            for (float[] row : weights)
+                Arrays.fill(row, Float.POSITIVE_INFINITY);
+
+            if (includePathMetrics) {
+                distances = new long[sources][targets];
+                times = new long[sources][targets];
+                for (int i = 0; i < sources; i++) {
+                    Arrays.fill(distances[i], -1);
+                    Arrays.fill(times[i], -1);
+                }
+            } else {
+                distances = null;
+                times = null;
+            }
+        }
+
+        void insertOneToMany(int sourceIndex, int[] targetIndices, RPHASTAlgorithm.OneToManyResult result) {
+            float[] weightRow = weights[sourceIndex];
+            long[] distanceRow = distances != null ? distances[sourceIndex] : null;
+            long[] timeRow = times != null ? times[sourceIndex] : null;
+            for (int i = 0; i < targetIndices.length; i++) {
+                int targetIdx = targetIndices[i];
+                weightRow[targetIdx] = result.weight[i];
+                if (distanceRow != null && result.distanceMeters != null)
+                    distanceRow[targetIdx] = result.distanceMeters[i];
+                if (timeRow != null && result.timeMillis != null)
+                    timeRow[targetIdx] = result.timeMillis[i];
+            }
+        }
+
+        void insertManyToMany(int[] sourceIndices, int[] targetIndices, RPHASTAlgorithm.ManyToManyResult result) {
+            for (int i = 0; i < sourceIndices.length; i++) {
+                int sourceIdx = sourceIndices[i];
+                float[] weightRow = weights[sourceIdx];
+                float[] weightResultRow = result.weight[i];
+                long[] distanceRow = distances != null ? distances[sourceIdx] : null;
+                long[] distanceResultRow = result.distanceMeters != null ? result.distanceMeters[i] : null;
+                long[] timeRow = times != null ? times[sourceIdx] : null;
+                long[] timeResultRow = result.timeMillis != null ? result.timeMillis[i] : null;
+                for (int j = 0; j < targetIndices.length; j++) {
+                    int targetIdx = targetIndices[j];
+                    weightRow[targetIdx] = weightResultRow[j];
+                    if (distanceRow != null && distanceResultRow != null)
+                        distanceRow[targetIdx] = distanceResultRow[j];
+                    if (timeRow != null && timeResultRow != null)
+                        timeRow[targetIdx] = timeResultRow[j];
+                }
+            }
+        }
     }
 
     public static class MatrixRequest {
@@ -154,6 +267,21 @@ public class MatrixResource {
             this.distances = distances;
             this.times = times;
             this.metrics = metrics;
+        }
+
+        static MatrixResponse fromFullMatrices(int[] sources, int[] targets,
+                                               float[][] weights,
+                                               long[][] distances,
+                                               long[][] times,
+                                               RPHASTAlgorithm.Metrics metrics,
+                                               boolean includePathMetrics) {
+            List<Integer> sourceNodes = toList(sources);
+            List<Integer> targetNodes = toList(targets);
+            List<List<Double>> weightsMatrix = toMatrix(weights);
+            List<List<Long>> distanceMatrix = includePathMetrics ? toMatrix(distances) : null;
+            List<List<Long>> timeMatrix = includePathMetrics ? toMatrix(times) : null;
+            Metrics matrixMetrics = Metrics.from(metrics);
+            return new MatrixResponse(sourceNodes, targetNodes, weightsMatrix, distanceMatrix, timeMatrix, matrixMetrics);
         }
 
         static MatrixResponse fromOneToMany(RPHASTAlgorithm.OneToManyResult result, int[] sources, int[] targets, boolean includePathMetrics) {
@@ -223,7 +351,7 @@ public class MatrixResource {
         private static List<Long> toRow(long[] row) {
             List<Long> list = new ArrayList<>(row.length);
             for (long value : row)
-                list.add(value < 0 ? null : value);
+                list.add(value < 0 ? -1 : value);
             return list;
         }
     }
@@ -242,6 +370,8 @@ public class MatrixResource {
 
         static Metrics from(RPHASTAlgorithm.Metrics metrics) {
             Metrics m = new Metrics();
+            if (metrics == null)
+                return m;
             m.tSnapSourceMs = metrics.tSnapSourceMs;
             m.tSnapTargetsMs = metrics.tSnapTargetsMs;
             m.tForwardUpMs = metrics.tForwardUpMs;
