@@ -101,8 +101,7 @@ public class MatrixResource {
         MatrixResponse response = MatrixResponse.fromFullMatrices(
                 accumulator.distances,
                 accumulator.times,
-                baseMetrics,
-                includePathMetrics
+                baseMetrics
         );
 
         double tookMillis = sw.stop().getMillisDouble();
@@ -250,10 +249,9 @@ public class MatrixResource {
 
         static MatrixResponse fromFullMatrices(long[][] distances,
                                                long[][] times,
-                                               RPHASTAlgorithm.Metrics metrics,
-                                               boolean includePathMetrics) {
-            List<List<Long>> distanceMatrix = includePathMetrics ? toMatrix(distances) : null;
-            List<List<Long>> timeMatrix = includePathMetrics ? toMatrix(times) : null;
+                                               RPHASTAlgorithm.Metrics metrics) {
+            List<List<Long>> distanceMatrix = distances != null ? toMatrix(distances) : null;
+            List<List<Long>> timeMatrix = times != null ? toMatrix(times) : null;
             Metrics matrixMetrics = Metrics.from(metrics);
             return new MatrixResponse(distanceMatrix, timeMatrix, matrixMetrics);
         }

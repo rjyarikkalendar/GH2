@@ -68,8 +68,16 @@ public class RPHASTAlgorithm {
             throw new IllegalArgumentException("sourceNodeIds and targetNodeIds must not be null");
         Metrics aggregated = new Metrics();
         float[][] weights = new float[sourceNodeIds.length][targetNodeIds.length];
-        long[][] distances = unpackPathsForTargets ? new long[sourceNodeIds.length][targetNodeIds.length] : null;
-        long[][] times = unpackPathsForTargets ? new long[sourceNodeIds.length][targetNodeIds.length] : null;
+        long[][] distances = null;
+        long[][] times = null;
+        if (unpackPathsForTargets) {
+            distances = new long[sourceNodeIds.length][targetNodeIds.length];
+            times = new long[sourceNodeIds.length][targetNodeIds.length];
+            for (int i = 0; i < sourceNodeIds.length; i++) {
+                Arrays.fill(distances[i], -1);
+                Arrays.fill(times[i], -1);
+            }
+        }
 
         long t0 = aggregated.tic();
         Dedup dedup = dedupTargets(targetNodeIds);
