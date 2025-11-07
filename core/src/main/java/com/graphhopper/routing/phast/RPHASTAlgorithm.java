@@ -148,8 +148,12 @@ public class RPHASTAlgorithm {
             Arrays.fill(distances, -1);
             Arrays.fill(times, -1);
             for (int i = 0; i < targetNodeIds.length; i++) {
-                if (weightsOut[i] == INF || targetNodeIds[i] < 0)
+                if (targetNodeIds[i] < 0)
                     continue;
+                // Try to unpack path metrics for this target. Previously we only attempted unpack when
+                // the RPHAST weight was finite. For robustness we now always try to unpack (even if the
+                // RPHAST weight is INF) because CH-based unpack or the slower Dijkstra fallback in the
+                // PathMetricsProvider may still find a valid path and real distance/time.
                 DistTime dt = pathMetricsProvider.unpack(sourceNodeId, targetNodeIds[i]);
                 if (dt != null) {
                     distances[i] = dt.distanceMeters;
